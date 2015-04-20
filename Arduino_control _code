@@ -1,0 +1,359 @@
+
+#include <PID_v1.h>
+#include <Servo.h>
+
+int dir1MotorA = 2; int dir1MotorB = 5; int dir1MotorC = 8;
+int dir2MotorA = 3;  int dir2MotorB = 6; int dir2MotorC = 9;
+double speedMotorA = 4; double speedMotorB = 7; double speedMotorC = 10;
+int Alimit = 11;  int Blimit = 12;  int Climit = 13;
+int readingA;  int readingB;  int readingC;
+Servo myservo;
+
+int encoderAPinA = 30;  int encoderBPinA = 50;  int encoderCPinA = 14;
+int encoderAPinB = 31;  int encoderBPinB = 51;  int encoderCPinB = 15;
+long int AlastTiming = 0;  long int BlastTiming = 0;  long int ClastTiming = 0;
+volatile long AcurrentPosition = 0;  volatile long BcurrentPosition = 0; volatile long CcurrentPosition;
+double Setpoint1, Input1, Output1; double Setpoint2, Input2, Output2;  double Setpoint3, Input3, Output3;
+double pidInput1, pidInput2, pidInput3;
+PID myPID1(&pidInput1, &Output1, &Setpoint1, 0.5, 0.001, 0.3, DIRECT);
+PID myPID2(&pidInput2, &Output2, &Setpoint2, 0.5, 0.001, 0.3, DIRECT);
+PID myPID3(&pidInput3, &Output3, &Setpoint3, 0.5, 0.001, 0.3, DIRECT);
+
+/*
+Coordinate Storage
+*/
+
+double xCoords[] = { 0,   0,  0,  0,  0,    0,   0, -4, -4, 0,  0,  0,  4, 4,  0,  0,  0,  0};
+double yCoords[] = { -6, -6,  0, -6,  0,    0,   0,  3,  3, 0,  0,  0,  3, 3,  0,  0,  0,  0};
+double zCoords[] = { 15, 9.5, 0, 12, 11, 10,  15, 15,  9, 0, 12.6, 10, 15, 9, 0,   13.8,   14, 25};
+char commandType[] = {1, 1,  2,   1,  1,   3,    1,  1,  1, 2,  1, 3,  1, 1,  2,  1,  3,  1}; //1 = coordinates, 2 = servo
+int commandShift = 0;
+bool isNewCoordinate = true;
+double Setpoint11, Setpoint22, Setpoint33;
+char* tempCommand;
+
+int tolerance = 200;
+
+bool isEnd = false;
+/*
+Coordinate Storage end
+*/
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("Init");
+  pinMode(dir1MotorA, OUTPUT); pinMode(dir1MotorB, OUTPUT);  pinMode(dir1MotorC, OUTPUT);
+  pinMode(dir2MotorA, OUTPUT); pinMode(dir2MotorB, OUTPUT);  pinMode(dir2MotorC, OUTPUT);
+  pinMode(speedMotorA, OUTPUT); pinMode(speedMotorB, OUTPUT); pinMode(speedMotorC, OUTPUT);
+  pinMode(Alimit, INPUT_PULLUP);  pinMode(Blimit, INPUT_PULLUP); pinMode(Climit, INPUT_PULLUP);
+  pinMode(encoderAPinA, INPUT_PULLUP); pinMode(encoderBPinA, INPUT_PULLUP); pinMode(encoderCPinA, INPUT_PULLUP);
+  pinMode(encoderAPinB, INPUT_PULLUP); pinMode(encoderBPinB, INPUT_PULLUP); pinMode(encoderCPinB, INPUT_PULLUP);
+  attachInterrupt(encoderAPinA, doEncoderA1, CHANGE); attachInterrupt(encoderBPinA, doEncoderB1, CHANGE); attachInterrupt(encoderCPinA, doEncoderC1, CHANGE);
+  attachInterrupt(encoderAPinB, doEncoderA2, CHANGE); attachInterrupt(encoderBPinB, doEncoderB2, CHANGE); attachInterrupt(encoderCPinB, doEncoderC2, CHANGE);
+  myservo.attach(21);
+  myservo.write(180);
+
+  myPID1.SetMode(AUTOMATIC); myPID1.SetSampleTime(100);
+  myPID2.SetMode(AUTOMATIC); myPID2.SetSampleTime(100);
+  myPID3.SetMode(AUTOMATIC); myPID3.SetSampleTime(100);
+
+  readingA = digitalRead(Alimit); readingB = digitalRead(Blimit); readingC = digitalRead(Climit);
+
+
+  analogWrite(speedMotorA, 200);
+  digitalWrite(dir1MotorA, LOW);
+  digitalWrite(dir2MotorA, HIGH);
+
+  analogWrite(speedMotorB, 200);
+  digitalWrite(dir1MotorB, LOW);
+  digitalWrite(dir2MotorB, HIGH);
+
+  analogWrite(speedMotorC, 200);
+  digitalWrite(dir1MotorC, LOW);
+  digitalWrite(dir2MotorC, HIGH);
+
+
+  while (readingA == LOW || readingB == LOW || readingC == LOW) {
+    readingA = digitalRead(Alimit);
+    readingB = digitalRead(Blimit);
+    readingC = digitalRead(Climit);
+
+    if (readingA == HIGH) {
+      analogWrite(speedMotorA, 0);
+      digitalWrite(dir1MotorA, LOW);
+      digitalWrite(dir2MotorA, LOW);
+      AcurrentPosition = 0;
+    }
+
+    if (readingB == HIGH) {
+      analogWrite(speedMotorB, 0);
+      digitalWrite(dir1MotorB, LOW);
+      digitalWrite(dir2MotorB, LOW);
+      BcurrentPosition = 0;
+    }
+
+    if (readingC == HIGH) {
+      analogWrite(speedMotorC, 0);
+      digitalWrite(dir1MotorC, LOW);
+      digitalWrite(dir2MotorC, LOW);
+      CcurrentPosition = 0;
+    }
+  }
+
+
+}
+
+void loop() {
+
+
+  Input1 = AcurrentPosition;    Input2 = BcurrentPosition;  Input3 = CcurrentPosition;
+  if (isNewCoordinate) {
+    char commandTypeInstance = commandType[commandShift];
+    if (commandTypeInstance == 1) {
+      double X, Y, Z;
+      X = xCoords[commandShift];
+      Y = yCoords[commandShift];
+      Z = zCoords[commandShift];
+      Setpoint11 = AlgoA(X, Y, Z);   Setpoint22 = AlgoB(X, Y, Z);   Setpoint33 = AlgoC(X, Y, Z);
+
+    } else if (commandTypeInstance == 2) {
+      stopAll();
+      myservo.write(140);
+      delay(200);
+
+    }
+    else {
+      stopAll();
+      myservo.write(180);
+      delay(200);
+    }
+
+
+    isNewCoordinate = false;
+  }
+
+  if (!isEnd) {
+    MoveA(Input1, Setpoint11); MoveB(Input2, Setpoint22); MoveC(Input3, Setpoint33);
+  }
+
+  if ((abs(Input1 - Setpoint11) < tolerance) && (abs(Input2 - Setpoint22) < tolerance) && (abs(Input3 - Setpoint33) < tolerance)) {
+
+    if (commandShift < ((sizeof(xCoords) / sizeof(double)) - 1)) {
+      commandShift++;
+      Serial.print("Shifting to Coordinate :");
+      Serial.println(commandShift);
+      isNewCoordinate = true;
+
+
+    } else {
+      Serial.print("End of the sequence");
+      isEnd = true;
+      analogWrite(speedMotorA, 0);
+      analogWrite(speedMotorB, 0);
+      analogWrite(speedMotorC, 0);
+    }
+  }
+
+
+
+}
+
+void doEncoderA1() {
+  if (digitalRead(encoderAPinA) != digitalRead(encoderAPinB)) {
+    AcurrentPosition ++;
+  }
+  else {
+    AcurrentPosition --;
+  }
+}
+
+void doEncoderB1() {
+  if (digitalRead(encoderBPinA) != digitalRead(encoderBPinB)) {
+    BcurrentPosition ++;
+  }
+  else {
+    BcurrentPosition --;
+  }
+}
+
+void doEncoderC1() {
+  if (digitalRead(encoderCPinA) != digitalRead(encoderCPinB)) {
+    CcurrentPosition ++;
+  }
+  else {
+    CcurrentPosition --;
+  }
+}
+
+void doEncoderA2() {
+  if (digitalRead(encoderAPinA) == digitalRead(encoderAPinB)) {
+    AcurrentPosition ++;
+  }
+  else {
+    AcurrentPosition --;
+  }
+}
+
+void doEncoderB2() {
+  if (digitalRead(encoderBPinA) == digitalRead(encoderBPinB)) {
+    BcurrentPosition ++;
+  }
+  else {
+    BcurrentPosition --;
+  }
+}
+
+void doEncoderC2() {
+  if (digitalRead(encoderCPinA) == digitalRead(encoderCPinB)) {
+    CcurrentPosition ++;
+  }
+  else {
+    CcurrentPosition --;
+  }
+}
+
+
+void MoveA(double Input, double Setpoint) {
+
+  Setpoint1 = Setpoint;
+
+  if ((Setpoint - Input) > 0)
+  {
+    digitalWrite(dir1MotorA, HIGH);
+    digitalWrite(dir2MotorA, LOW);
+    myPID1.Compute();
+    analogWrite(speedMotorA, Output1);
+
+  }
+
+  if ((Input - Setpoint) > 0) {
+    Setpoint1 = -Setpoint1;
+    pidInput1 = -Input1;
+    digitalWrite(dir1MotorA, LOW);
+    digitalWrite(dir2MotorA, HIGH);
+    myPID1.Compute();
+    analogWrite(speedMotorA, Output1);
+
+  }
+
+  if (millis() - AlastTiming > 500) {
+
+    AlastTiming = millis();
+  }
+
+}
+
+void MoveB(double Input, double Setpoint) {
+
+  Setpoint2 = Setpoint;
+
+  if ((Setpoint2 - Input2) > 0)
+  {
+    digitalWrite(dir1MotorB, HIGH);
+    digitalWrite(dir2MotorB, LOW);
+    myPID2.Compute();
+    analogWrite(speedMotorB, Output2);
+
+  }
+
+  if ((Input - Setpoint) > 0) {
+    Setpoint2 = -Setpoint;
+    pidInput2 = -Input2;
+    digitalWrite(dir1MotorB, LOW);
+    digitalWrite(dir2MotorB, HIGH);
+    myPID2.Compute();
+    analogWrite(speedMotorB, Output2);
+
+  }
+
+  if (millis() - BlastTiming > 500) {
+
+    BlastTiming = millis();
+  }
+}
+
+void MoveC(double Input, double Setpoint) {
+
+  Setpoint3 = Setpoint;
+
+  if ((Setpoint - Input) > 0)
+  {
+    digitalWrite(dir1MotorC, HIGH);
+    digitalWrite(dir2MotorC, LOW);
+    myPID3.Compute();
+    analogWrite(speedMotorC, Output3);
+
+  }
+
+  if ((Input - Setpoint) > 0) {
+    Setpoint3 = -Setpoint;
+    pidInput3 = -Input3;
+    digitalWrite(dir1MotorC, LOW);
+    digitalWrite(dir2MotorC, HIGH);
+    myPID3.Compute();
+    analogWrite(speedMotorC, Output3);
+
+  }
+
+  if (millis() - ClastTiming > 500) {
+
+    ClastTiming = millis();
+  }
+}
+
+double AlgoA(double X, double Y, double Z) {
+
+  double AE; double L = 23;
+  double Setpoint;
+  double AH = 52;       double Acx = 0;       double Acy = 15;
+
+  double ER = (10000 / 16.3);
+
+  AE = AH - sqrt(pow(L, 2) - pow((X - Acx), 2) - pow((Y - Acy), 2)) - Z;
+
+  Setpoint = ER * AE;
+  //Serial.println(Setpoint);
+
+  return Setpoint;
+
+}
+
+double AlgoB(double X, double Y, double Z) {
+
+  double BE; double L = 23;
+  double Setpoint;
+  double BH = 52;           double Bcx = 13.5;              double Bcy = -8;
+
+  double ER = (10000 / 16.3);
+
+  BE = BH - sqrt(pow(L, 2) - pow((X - Bcx), 2) - pow((Y - Bcy), 2)) - Z;
+
+  Setpoint = ER * BE;
+  // Serial.println(Setpoint);
+
+  return Setpoint;
+}
+
+double AlgoC(double X, double Y, double Z) {
+
+  double CE; double L = 23;
+  double Setpoint;
+  double CH = 51;          double Ccx = -13;                double Ccy = -8.6;
+
+  double ER = (10000 / 16.3);
+
+  CE = CH - sqrt(pow(L, 2) - pow((X - Ccx), 2) - pow((Y - Ccy), 2)) - Z;
+
+  Setpoint = ER * CE;
+  // Serial.println(Setpoint);
+
+  return Setpoint;
+}
+void stopAll() {
+  digitalWrite(dir1MotorA, LOW);
+  digitalWrite(dir2MotorA, LOW);
+  digitalWrite(dir1MotorB, LOW);
+  digitalWrite(dir2MotorB, LOW);
+  digitalWrite(dir1MotorC, LOW);
+  digitalWrite(dir2MotorC, LOW);
+}
